@@ -336,7 +336,8 @@ mod windows_appbar {
         } else {
             0
         };
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let native_hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(native_hwnd.0 as *mut std::ffi::c_void);
         unsafe {
             SetWindowPos(
                 hwnd,
@@ -360,7 +361,8 @@ mod windows_appbar {
         logical_height: f64,
     ) -> Result<(), String> {
         let (width, height) = physical_dimensions(window, logical_width, logical_height)?;
-        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let native_hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        let hwnd = HWND(native_hwnd.0 as *mut std::ffi::c_void);
         if !enabled {
             let mut data = appbar_data(hwnd, position, width, height);
             unsafe {
