@@ -203,6 +203,242 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
     result.map(|()| enabled).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_system_volume() -> Result<u8, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows_controls::get_system_volume();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Kontrol volume sistem hanya tersedia di Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn set_system_volume(level: u8) -> Result<u8, String> {
+    if level > 100 {
+        return Err("Volume harus berada antara 0 dan 100.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_controls::set_system_volume(level)?;
+        return Ok(level);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = level;
+        Err("Kontrol volume sistem hanya tersedia di Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn get_system_brightness() -> Result<u8, String> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows_controls::get_system_brightness();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Kontrol kecerahan sistem hanya tersedia di Windows.".to_string())
+    }
+}
+
+#[tauri::command]
+fn set_system_brightness(level: u8) -> Result<u8, String> {
+    if level > 100 {
+        return Err("Kecerahan harus berada antara 0 dan 100.".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        windows_controls::set_system_brightness(level)?;
+        return Ok(level);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = level;
+        Err("Kontrol kecerahan sistem hanya tersedia di Windows.".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_controls {
+    use std::process::Command;
+
+    const CORE_AUDIO_TYPES: &str = r#"
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+[ComImport]
+[Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+class NotchMMDeviceEnumeratorComObject {}
+
+[ComImport]
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface NotchIMMDeviceEnumerator {
+  [PreserveSig] int EnumAudioEndpoints(int dataFlow, uint stateMask, out IntPtr devices);
+  [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out NotchIMMDevice device);
+  [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string id, out NotchIMMDevice device);
+  [PreserveSig] int RegisterEndpointNotificationCallback(IntPtr client);
+  [PreserveSig] int UnregisterEndpointNotificationCallback(IntPtr client);
+}
+
+[ComImport]
+[Guid("D666063F-1587-4E43-81F1-B948E807363F")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface NotchIMMDevice {
+  [PreserveSig] int Activate(ref Guid iid, uint classContext, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object instance);
+  [PreserveSig] int OpenPropertyStore(uint access, out IntPtr properties);
+  [PreserveSig] int GetId(out IntPtr id);
+  [PreserveSig] int GetState(out uint state);
+}
+
+[ComImport]
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface NotchIAudioEndpointVolume {
+  [PreserveSig] int RegisterControlChangeNotify(IntPtr notify);
+  [PreserveSig] int UnregisterControlChangeNotify(IntPtr notify);
+  [PreserveSig] int GetChannelCount(out uint channelCount);
+  [PreserveSig] int SetMasterVolumeLevel(float levelDb, ref Guid eventContext);
+  [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid eventContext);
+  [PreserveSig] int GetMasterVolumeLevel(out float levelDb);
+  [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
+  [PreserveSig] int SetChannelVolumeLevel(uint channel, float levelDb, ref Guid eventContext);
+  [PreserveSig] int SetChannelVolumeLevelScalar(uint channel, float level, ref Guid eventContext);
+  [PreserveSig] int GetChannelVolumeLevel(uint channel, out float levelDb);
+  [PreserveSig] int GetChannelVolumeLevelScalar(uint channel, out float level);
+  [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid eventContext);
+  [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
+  [PreserveSig] int GetVolumeStepInfo(out uint step, out uint stepCount);
+  [PreserveSig] int VolumeStepUp(ref Guid eventContext);
+  [PreserveSig] int VolumeStepDown(ref Guid eventContext);
+  [PreserveSig] int QueryHardwareSupport(out uint hardwareSupportMask);
+  [PreserveSig] int GetVolumeRange(out float volumeMin, out float volumeMax, out float volumeIncrement);
+}
+
+public static class NotchAudioControl {
+  static NotchIAudioEndpointVolume GetEndpoint() {
+    var enumerator = (NotchIMMDeviceEnumerator)new NotchMMDeviceEnumeratorComObject();
+    NotchIMMDevice device;
+    Marshal.ThrowExceptionForHR(enumerator.GetDefaultAudioEndpoint(0, 1, out device));
+    object endpoint;
+    Guid iid = typeof(NotchIAudioEndpointVolume).GUID;
+    Marshal.ThrowExceptionForHR(device.Activate(ref iid, 23, IntPtr.Zero, out endpoint));
+    return (NotchIAudioEndpointVolume)endpoint;
+  }
+
+  public static void Set(int percent) {
+    var endpoint = GetEndpoint();
+    Guid eventContext = Guid.Empty;
+    Marshal.ThrowExceptionForHR(endpoint.SetMasterVolumeLevelScalar(percent / 100.0f, ref eventContext));
+  }
+
+  public static int Get() {
+    var endpoint = GetEndpoint();
+    float level;
+    Marshal.ThrowExceptionForHR(endpoint.GetMasterVolumeLevelScalar(out level));
+    return (int)Math.Round(level * 100.0f);
+  }
+}
+'@
+"#;
+
+    fn run_powershell(script: &str) -> Result<String, String> {
+        use std::os::windows::process::CommandExt;
+
+        let output = Command::new("powershell.exe")
+            .creation_flags(0x08000000)
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .output()
+            .map_err(|error| format!("PowerShell tidak dapat dijalankan: {error}"))?;
+
+        if !output.status.success() {
+            let details = String::from_utf8_lossy(&output.stderr);
+            return Err(if details.trim().is_empty() {
+                format!("Perintah Windows gagal dengan status {}.", output.status)
+            } else {
+                details.trim().to_string()
+            });
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    pub fn get_system_volume() -> Result<u8, String> {
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'\n{CORE_AUDIO_TYPES}\n[Console]::WriteLine([NotchAudioControl]::Get())"
+        );
+        parse_level(&run_powershell(&script)?, "volume")
+    }
+
+    pub fn set_system_volume(level: u8) -> Result<(), String> {
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'\n{CORE_AUDIO_TYPES}\n[NotchAudioControl]::Set({level})"
+        );
+        run_powershell(&script).map(|_| ())
+    }
+
+    pub fn get_system_brightness() -> Result<u8, String> {
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+$monitor = Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness |
+  Where-Object { $_.Active } | Select-Object -First 1
+if ($null -eq $monitor) { throw 'Windows tidak menemukan monitor yang mendukung kontrol kecerahan.' }
+[Console]::WriteLine([int]$monitor.CurrentBrightness)
+"#;
+        parse_level(&run_powershell(script)?, "kecerahan")
+    }
+
+    pub fn set_system_brightness(level: u8) -> Result<(), String> {
+        let script = format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+$monitors = @(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods |
+  Where-Object {{ $_.Active }})
+if ($monitors.Count -eq 0) {{ throw 'Windows tidak menemukan monitor yang mendukung kontrol kecerahan.' }}
+foreach ($monitor in $monitors) {{
+  $result = Invoke-CimMethod -InputObject $monitor -MethodName WmiSetBrightness -Arguments @{{ Timeout = 1; Brightness = {level} }}
+  if ($result.ReturnValue -ne 0) {{ throw \"Driver monitor menolak perubahan kecerahan (kode $($result.ReturnValue)).\" }}
+}}
+"#
+        );
+        run_powershell(&script).map(|_| ())
+    }
+
+    fn parse_level(output: &str, name: &str) -> Result<u8, String> {
+        output
+            .lines()
+            .last()
+            .ok_or_else(|| format!("Windows tidak mengembalikan nilai {name}."))?
+            .trim()
+            .parse::<u8>()
+            .map_err(|error| format!("Nilai {name} dari Windows tidak valid: {error}"))
+            .and_then(|level| {
+                if level <= 100 {
+                    Ok(level)
+                } else {
+                    Err(format!("Nilai {name} dari Windows di luar rentang 0–100."))
+                }
+            })
+    }
+}
+
 fn validate_position(position: &str) -> Result<(), String> {
     if position == "top" || position == "bottom" {
         Ok(())
@@ -429,7 +665,11 @@ fn main() {
             set_widget_dimensions,
             open_settings,
             get_autostart,
-            set_autostart
+            set_autostart,
+            get_system_volume,
+            set_system_volume,
+            get_system_brightness,
+            set_system_brightness
         ])
         .run(tauri::generate_context!())
         .expect("Gagal menjalankan aplikasi Notch");
