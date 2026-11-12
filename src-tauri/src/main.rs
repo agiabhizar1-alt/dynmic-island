@@ -272,7 +272,6 @@ fn resize_and_place(
 #[cfg(target_os = "windows")]
 mod windows_appbar {
     use std::mem::size_of;
-    use tauri::platform::windows::WindowExtWindows;
     use tauri::WebviewWindow;
     use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::UI::Shell::{
@@ -337,9 +336,8 @@ mod windows_appbar {
         } else {
             0
         };
-        let raw_hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        let hwnd = HWND(raw_hwnd.0 as *mut std::ffi::c_void);
-        let positioned = unsafe {
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        unsafe {
             SetWindowPos(
                 hwnd,
                 HWND(-1isize as *mut std::ffi::c_void),
@@ -349,10 +347,8 @@ mod windows_appbar {
                 height,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
-        };
-        if !positioned.as_bool() {
-            return Err("Windows tidak dapat memosisikan widget.".to_string());
         }
+        .map_err(|error| format!("Windows tidak dapat memosisikan widget: {error}"))?;
         Ok(())
     }
 
@@ -364,8 +360,7 @@ mod windows_appbar {
         logical_height: f64,
     ) -> Result<(), String> {
         let (width, height) = physical_dimensions(window, logical_width, logical_height)?;
-        let raw_hwnd = window.hwnd().map_err(|error| error.to_string())?;
-        let hwnd = HWND(raw_hwnd.0 as *mut std::ffi::c_void);
+        let hwnd = window.hwnd().map_err(|error| error.to_string())?;
         if !enabled {
             let mut data = appbar_data(hwnd, position, width, height);
             unsafe {
@@ -391,7 +386,7 @@ mod windows_appbar {
             }
         }
 
-        let positioned = unsafe {
+        unsafe {
             SetWindowPos(
                 hwnd,
                 HWND(-1isize as *mut std::ffi::c_void),
@@ -401,10 +396,8 @@ mod windows_appbar {
                 data.rc.bottom - data.rc.top,
                 SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
-        };
-        if !positioned.as_bool() {
-            return Err("Windows tidak dapat memosisikan AppBar.".to_string());
         }
+        .map_err(|error| format!("Windows tidak dapat memosisikan AppBar: {error}"))?;
         Ok(())
     }
 }
