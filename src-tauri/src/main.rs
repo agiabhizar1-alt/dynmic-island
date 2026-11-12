@@ -204,10 +204,12 @@ fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn get_system_volume() -> Result<u8, String> {
+async fn get_system_volume() -> Result<u8, String> {
     #[cfg(target_os = "windows")]
     {
-        return windows_controls::get_system_volume();
+        return tauri::async_runtime::spawn_blocking(windows_controls::get_system_volume)
+            .await
+            .map_err(|error| format!("Kontrol volume Windows gagal dijalankan: {error}"))?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -217,14 +219,16 @@ fn get_system_volume() -> Result<u8, String> {
 }
 
 #[tauri::command]
-fn set_system_volume(level: u8) -> Result<u8, String> {
+async fn set_system_volume(level: u8) -> Result<u8, String> {
     if level > 100 {
         return Err("Volume harus berada antara 0 dan 100.".to_string());
     }
 
     #[cfg(target_os = "windows")]
     {
-        windows_controls::set_system_volume(level)?;
+        tauri::async_runtime::spawn_blocking(move || windows_controls::set_system_volume(level))
+            .await
+            .map_err(|error| format!("Kontrol volume Windows gagal dijalankan: {error}"))??;
         return Ok(level);
     }
 
@@ -236,10 +240,12 @@ fn set_system_volume(level: u8) -> Result<u8, String> {
 }
 
 #[tauri::command]
-fn get_system_brightness() -> Result<u8, String> {
+async fn get_system_brightness() -> Result<u8, String> {
     #[cfg(target_os = "windows")]
     {
-        return windows_controls::get_system_brightness();
+        return tauri::async_runtime::spawn_blocking(windows_controls::get_system_brightness)
+            .await
+            .map_err(|error| format!("Kontrol kecerahan Windows gagal dijalankan: {error}"))?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -249,14 +255,16 @@ fn get_system_brightness() -> Result<u8, String> {
 }
 
 #[tauri::command]
-fn set_system_brightness(level: u8) -> Result<u8, String> {
+async fn set_system_brightness(level: u8) -> Result<u8, String> {
     if level > 100 {
         return Err("Kecerahan harus berada antara 0 dan 100.".to_string());
     }
 
     #[cfg(target_os = "windows")]
     {
-        windows_controls::set_system_brightness(level)?;
+        tauri::async_runtime::spawn_blocking(move || windows_controls::set_system_brightness(level))
+            .await
+            .map_err(|error| format!("Kontrol kecerahan Windows gagal dijalankan: {error}"))??;
         return Ok(level);
     }
 
@@ -433,7 +441,7 @@ foreach ($monitor in $monitors) {{
                 if level <= 100 {
                     Ok(level)
                 } else {
-                    Err(format!("Nilai {name} dari Windows di luar rentang 0–100."))
+                    Err(format!("Nilai {name} dari Windows di luar rentang 0â€“100."))
                 }
             })
     }
