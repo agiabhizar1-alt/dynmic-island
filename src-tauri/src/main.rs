@@ -3,10 +3,32 @@
 use tauri::Manager;
 
 #[tauri::command]
-fn set_always_on_top(window: tauri::WebviewWindow, enabled: bool) -> Result<bool, String> {
+fn set_always_on_top(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("notch")
+        .ok_or_else(|| "Jendela Notch tidak ditemukan.".to_string())?;
     window
         .set_always_on_top(enabled)
         .map(|()| enabled)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_control_center(app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("control-center")
+        .ok_or_else(|| "Jendela Control Center tidak ditemukan.".to_string())?;
+    #[cfg(target_os = "windows")]
+    windows_appbar::place_control_center(&window)?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn close_control_center(app: tauri::AppHandle) -> Result<(), String> {
+    app.get_webview_window("control-center")
+        .ok_or_else(|| "Jendela Control Center tidak ditemukan.".to_string())?
+        .hide()
         .map_err(|error| error.to_string())
 }
 
@@ -35,7 +57,7 @@ fn set_expanded(
 
 #[tauri::command]
 fn set_appbar(
-    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
     enabled: bool,
     position: String,
     expanded: bool,
@@ -46,6 +68,9 @@ fn set_appbar(
 ) -> Result<bool, String> {
     validate_position(&position)?;
     validate_widget_sizes(collapsed_width, collapsed_height, expanded_width, expanded_height)?;
+    let window = app
+        .get_webview_window("notch")
+        .ok_or_else(|| "Jendela Notch tidak ditemukan.".to_string())?;
 
     #[cfg(target_os = "windows")]
     {
@@ -118,8 +143,8 @@ fn set_widget_position(
     validate_widget_sizes(collapsed_width, collapsed_height, expanded_width, expanded_height)?;
 
     let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Jendela widget tidak ditemukan.".to_string())?;
+        .get_webview_window("notch")
+        .ok_or_else(|| "Jendela Notch tidak ditemukan.".to_string())?;
 
     #[cfg(target_os = "windows")]
     if appbar_enabled {
@@ -152,8 +177,8 @@ fn set_widget_dimensions(
     validate_position(&position)?;
     validate_widget_sizes(collapsed_width, collapsed_height, expanded_width, expanded_height)?;
     let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "Jendela widget tidak ditemukan.".to_string())?;
+        .get_webview_window("notch")
+        .ok_or_else(|| "Jendela Notch tidak ditemukan.".to_string())?;
 
     #[cfg(target_os = "windows")]
     if appbar_enabled {
@@ -441,7 +466,7 @@ foreach ($monitor in $monitors) {{
                 if level <= 100 {
                     Ok(level)
                 } else {
-                    Err(format!("Nilai {name} dari Windows di luar rentang 0â€“100."))
+                    Err(format!("Nilai {name} dari Windows di luar rentang 0–100."))
                 }
             })
     }
@@ -493,16 +518,12 @@ fn widget_size(
 fn resize_and_place(
     window: &tauri::WebviewWindow,
     position: &str,
-    width: f64,
-    height: f64,
+    _width: f64,
+    _height: f64,
 ) -> Result<(), String> {
-    window
-        .set_size(tauri::Size::Logical(tauri::LogicalSize::new(width, height)))
-        .map_err(|error| error.to_string())?;
-
     #[cfg(target_os = "windows")]
     {
-        windows_appbar::place_window(window, position, width, height)
+        windows_appbar::place_window(window, position, 900.0, 110.0)
             .map_err(|error| error.to_string())
     }
 
@@ -597,6 +618,73 @@ mod windows_appbar {
         Ok(())
     }
 
+    pub fn place_overlay(window: &WebviewWindow) -> Result<(), String> {
+        let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let scale = window.scale_factor().map_err(|error| error.to_string())?;
+        let logical_width = f64::from(screen_width) / scale;
+        window
+            .set_size(tauri::Size::Logical(tauri::LogicalSize::new(
+                logical_width,
+                96.0,
+            )))
+            .map_err(|error| error.to_string())?;
+        let hwnd = native_hwnd(window)?;
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND(-1isize as *mut std::ffi::c_void),
+                0,
+                0,
+                screen_width,
+                (96.0 * scale).round() as i32,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+        .map_err(|error| format!("Windows tidak dapat memosisikan overlay: {error}"))
+    }
+
+    pub fn place_control_toggle(window: &WebviewWindow) -> Result<(), String> {
+        let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let (width, height) = physical_dimensions(window, 48.0, 48.0)?;
+        let hwnd = native_hwnd(window)?;
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND(-1isize as *mut std::ffi::c_void),
+                (screen_width - width - 18).max(0),
+                8,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+        .map_err(|error| format!("Windows tidak dapat memosisikan tombol Control Center: {error}"))
+    }
+
+    pub fn place_control_center(window: &WebviewWindow) -> Result<(), String> {
+        let screen_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+        let screen_height = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+        let (width, height) = physical_dimensions(window, 400.0, 680.0)?;
+        let hwnd = native_hwnd(window)?;
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                HWND(-1isize as *mut std::ffi::c_void),
+                (screen_width - width - 18).max(0),
+                62,
+                width,
+                height.min((screen_height - 70).max(1)),
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        }
+        .map_err(|error| format!("Windows tidak dapat memosisikan Control Center: {error}"))
+    }
+
+    fn native_hwnd(window: &WebviewWindow) -> Result<HWND, String> {
+        let native_hwnd = window.hwnd().map_err(|error| error.to_string())?;
+        Ok(HWND(native_hwnd.0 as *mut std::ffi::c_void))
+    }
+
     pub fn set_appbar(
         window: &WebviewWindow,
         enabled: bool,
@@ -654,6 +742,36 @@ fn main() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .setup(|app| {
+            for label in ["main", "notch"] {
+                if let Some(window) = app.get_webview_window(label) {
+                    window.set_ignore_cursor_events(true)?;
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                let overlay = app
+                    .get_webview_window("main")
+                    .ok_or_else(|| std::io::Error::other("Jendela overlay tidak ditemukan."))?;
+                windows_appbar::place_overlay(&overlay)
+                    .map_err(|error| std::io::Error::other(error))?;
+
+                let notch = app
+                    .get_webview_window("notch")
+                    .ok_or_else(|| std::io::Error::other("Jendela Notch tidak ditemukan."))?;
+                windows_appbar::place_window(&notch, "top", 900.0, 110.0)
+                    .map_err(|error| std::io::Error::other(error))?;
+
+                let toggle = app
+                    .get_webview_window("control-toggle")
+                    .ok_or_else(|| std::io::Error::other("Tombol Control Center tidak ditemukan."))?;
+                windows_appbar::place_control_toggle(&toggle)
+                    .map_err(|error| std::io::Error::other(error))?;
+            }
+
+            Ok(())
+        })
         .on_window_event(|window, event| {
             if window.label() == "settings" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -663,9 +781,18 @@ fn main() {
                     }
                 }
             }
+            if window.label() == "control-center" {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    if let Err(error) = window.hide() {
+                        eprintln!("Tidak dapat menutup Control Center: {error}");
+                    }
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             set_always_on_top,
+            open_control_center,
+            close_control_center,
             set_expanded,
             set_appbar,
             set_dock_position,

@@ -22,10 +22,16 @@ jobs:
           node-version: 20
 
       - name: Install frontend dependencies
-        run: npm install --no-fund --no-audit
+        shell: pwsh
+        run: npm install --package-lock=false
+
+      - name: Prepare frontend assets
+        shell: pwsh
+        run: node scripts/build-frontend.js
 
       - name: Build Tauri application
-        run: npm run build
+        shell: pwsh
+        run: npx tauri build
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v4
